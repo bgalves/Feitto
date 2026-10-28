@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Feitto's own data (clipboard history and settings) must never be committed
+data/
+*.fdb
+*.db
+
+# Build output
+build/
+dist/
+*.spec
