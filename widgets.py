@@ -447,7 +447,7 @@ class PopupMenu:
         top.bind("<Return>", lambda e: self._pick(self.hi))
         top.bind("<Escape>", lambda e: self.close())
 
-        l, t, r, b = ui._work_area(root)
+        l, t, r, b = ui._work_area(root, x, y)   # the monitor the menu is opened on
         nx = max(l + S(8), min(int(x), r - W - S(8)))
         ny = int(y) if y + H + S(8) <= b else int(y - H)
         if y >= b - S(4):      # opened from the taskbar: sit just above it

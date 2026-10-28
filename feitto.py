@@ -980,17 +980,18 @@ class App:
         self.target = user32.GetForegroundWindow()
         self.q.set("")
         self.refresh()
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         W = self.pop.winfo_width() if self.pop.winfo_width() > 100 else self.S(960)
         H = self.pop.winfo_height() if self.pop.winfo_height() > 100 else self.S(660)
         mode = self.cfg["popup_position"]
+        px, py = self.root.winfo_pointerx(), self.root.winfo_pointery()
+        if mode == "previous" and self.last_pos:
+            px, py = self.last_pos
+        l, t, r, b = ui._work_area(self.root, px, py)       # open on the monitor you are working on
         if mode == "center":
-            x, y = (sw - W) // 2, (sh - H) // 2
-        elif mode == "previous" and self.last_pos:
-            x, y = self.last_pos
+            x, y = l + (r - l - W) // 2, t + (b - t - H) // 2
         else:
-            x, y = self.root.winfo_pointerx(), self.root.winfo_pointery()
-        self.pop.geometry(f"+{max(0, min(x, sw - W))}+{max(0, min(y, sh - H - 40))}")
+            x, y = px, py
+        self.pop.geometry(f"+{max(l, min(x, r - W))}+{max(t, min(y, b - H))}")
         self.pop.attributes("-alpha", 0.0)
         self.pop.deiconify()
         self.theme.decorate(self.pop)
@@ -1170,9 +1171,9 @@ class App:
         w = self.dialogs[key] = tk.Toplevel(self.root)
         w.attributes("-alpha", 0.0)
         w.title(title)
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        W, H = min(S(size[0]), int(sw * 0.94)), min(S(size[1]), int(sh * 0.9))
-        w.geometry(f"{W}x{H}+{(sw - W) // 2}+{max(0, (sh - H) // 3)}")
+        l, t, r, b = ui._work_area(self.root, self.root.winfo_pointerx(), self.root.winfo_pointery())
+        W, H = min(S(size[0]), int((r - l) * 0.94)), min(S(size[1]), int((b - t) * 0.9))
+        w.geometry(f"{W}x{H}+{l + (r - l - W) // 2}+{t + max(0, (b - t - H) // 3)}")
         self.theme.track(w, bg="bg")
         w.update_idletasks()
         self.theme.decorate(w)

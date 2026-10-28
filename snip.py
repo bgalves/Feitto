@@ -37,17 +37,64 @@ gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
 gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
 dwm.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
 
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, wintypes.UINT]
+user32.GetAncestor.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+
 SRCCOPY, CAPTUREBLT = 0x00CC0020, 0x40000000
+_PER_MONITOR_V2 = ctypes.c_void_p(-4)   # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
+
+def _enter_physical():
+    """Let this thread see real screen pixels on every monitor.
+
+    The app itself is system-DPI aware, so with monitors of different scale factors Windows reports scaled
+    coordinates for the secondary screens. Capturing needs the real pixels. Returns the previous context."""
+    try:
+        f = user32.SetThreadDpiAwarenessContext
+        f.restype, f.argtypes = ctypes.c_void_p, [ctypes.c_void_p]
+        return f(_PER_MONITOR_V2)
+    except (AttributeError, OSError):   # Windows older than 10 (1607): nothing to switch
+        return None
+
+
+def _leave_physical(prev):
+    if prev:
+        try:
+            user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(prev))
+        except (AttributeError, OSError):
+            pass
+
+
+class physical_pixels:
+    def __enter__(self):
+        self.prev = _enter_physical()
+        return self
+
+    def __exit__(self, *exc):
+        _leave_physical(self.prev)
 
 
 def virtual_screen():
-    """(x, y, width, height) of the rectangle that spans every monitor."""
-    gm = user32.GetSystemMetrics
-    return gm(76), gm(77), gm(78), gm(79)
+    """(x, y, width, height) of the rectangle that spans every monitor, in real pixels (x/y can be negative)."""
+    with physical_pixels():
+        gm = user32.GetSystemMetrics
+        return gm(76), gm(77), gm(78), gm(79)
+
+
+def primary_size():
+    with physical_pixels():
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
 
 def grab(x, y, w, h):
     """Top-down BGRA bytes of a screen region (includes layered / translucent windows)."""
+    with physical_pixels():
+        return _grab(x, y, w, h)
+
+
+def _grab(x, y, w, h):
     sdc = user32.GetDC(None)
     mdc = gdi32.CreateCompatibleDC(sdc)
     bmp = gdi32.CreateCompatibleBitmap(sdc, w, h)
@@ -94,6 +141,11 @@ WNDENUM = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 def list_windows(skip_pid=None):
     """Visible top-level windows as (left, top, right, bottom), front-most first."""
+    with physical_pixels():
+        return _list_windows(skip_pid)
+
+
+def _list_windows(skip_pid=None):
     out = []
 
     def cb(hwnd, _):
@@ -132,12 +184,36 @@ class Selector:
     """
 
     def __init__(self, root, theme, bgra, vx, vy, vw, vh, mode):
+        self._ctx = _enter_physical()   # real pixels for this window's whole life (see physical_pixels)
+        try:
+            self._build(root, theme, bgra, vx, vy, vw, vh, mode)
+        except Exception:
+            _leave_physical(self._ctx)
+            raise
+
+    def _place(self, x, y, w, h):
+        """Make the overlay cover exactly the virtual screen, whatever Tk did with the requested geometry."""
+        top = self.top
+        top.update()
+        if (top.winfo_x(), top.winfo_y(), top.winfo_width(), top.winfo_height()) == (x, y, w, h):
+            return
+        try:
+            hwnd = user32.GetAncestor(top.winfo_id(), 2) or top.winfo_id()
+            user32.SetWindowPos(hwnd, ctypes.c_void_p(-1), x, y, w, h, 0x0010 | 0x0040)  # topmost, no activate, show
+            top.update_idletasks()
+        except Exception:
+            pass
+
+    def _build(self, root, theme, bgra, vx, vy, vw, vh, mode):
         self.th, self.vx, self.vy, self.vw, self.vh, self.mode = theme, vx, vy, vw, vh, mode
         self.windows = list_windows(os.getpid()) if mode == "window" else []
         top = self.top = tk.Toplevel(root)
         top.overrideredirect(True)
-        top.geometry(f"{vw}x{vh}{vx:+d}{vy:+d}")
+        # "+-1920" is how Tk spells a negative position; "-1920" would mean 1920 px from the RIGHT edge, which put
+        # the overlay in the wrong place whenever a monitor sits left of / above the main one.
+        top.geometry(f"{vw}x{vh}+{vx}+{vy}")
         top.attributes("-topmost", True)
+        self._place(vx, vy, vw, vh)
         cv = self.cv = tk.Canvas(top, width=vw, height=vh, highlightthickness=0, bd=0, cursor="crosshair")
         cv.pack()
         self.photo = tk.PhotoImage(data=bgra_to_ppm(bgra, vw, vh))
@@ -149,8 +225,11 @@ class Selector:
         self.tag = cv.create_text(0, 0, text="", fill=theme.pal["accent_fg"], font=theme.font(10, "bold"),
                                   anchor="nw", state="hidden")
         hint = ("Drag to select an area" if mode == "rect" else "Click a window") + "   ·   Esc to cancel"
-        hx = vw // 2
-        t = cv.create_text(hx, theme.s(28), text=hint, fill="#FFFFFF", font=theme.font(11, "bold"))
+        pw, _ph = primary_size()
+        hx = -vx + pw // 2   # centre of the PRIMARY monitor, not of the whole desktop (that is the seam between screens)
+        if not 0 < hx < vw:
+            hx = vw // 2
+        t = cv.create_text(hx, -vy + theme.s(28) if 0 <= -vy < vh else theme.s(28), text=hint, fill="#FFFFFF", font=theme.font(11, "bold"))
         x1, y1, x2, y2 = cv.bbox(t)
         bg = cv.create_rectangle(x1 - 14, y1 - 8, x2 + 14, y2 + 8, fill="#16171B", outline="")
         cv.tag_lower(bg, t)
@@ -165,13 +244,16 @@ class Selector:
         cv.bind("<Escape>", lambda e: self._finish(None))
 
     def run(self):
-        self.top.update()
-        self.top.focus_force()
-        self.cv.focus_set()
-        self.top.wait_variable(self.done)
-        res = self.result
-        self.top.destroy()
-        return res
+        try:
+            self.top.update()
+            self.top.focus_force()
+            self.cv.focus_set()
+            self.top.wait_variable(self.done)
+            res = self.result
+            self.top.destroy()
+            return res
+        finally:
+            _leave_physical(self._ctx)
 
     def _finish(self, res):
         self.result = res

@@ -32,7 +32,8 @@ into a chat or an email.
 <p align="center"><img src="docs/screenshots/screenshot-editor.png" alt="Screenshot editor with marks" width="80%"></p>
 
 - **Three capture modes:** *Rectangle* (drag an area), *Window* (hover to highlight, click to choose) and
-  *Full screen* (all monitors).
+  *Full screen* (all monitors). Works with several monitors, including ones with different scaling: *Full screen*
+  captures them all as one picture, and a rectangle can start on one monitor and end on another.
 - **Delay:** *None*, *3 s*, *5 s* or *10 s*, with an on-screen countdown, so you can open a menu or a tooltip first.
 - Mode and delay sit at the bottom of the main window next to the camera button, and again in the editor next to
   **New screenshot**. The hotkey (default `Ctrl+Alt+S`) and the tray menu capture straight away with those settings.

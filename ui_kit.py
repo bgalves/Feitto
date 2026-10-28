@@ -346,8 +346,29 @@ def fade_in(win, ms=150):
 
 
 # --------------------------------------------------------------------------- toast
-def _work_area(root):
-    """Screen area not covered by the taskbar: (left, top, right, bottom)."""
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD)]
+
+
+def _work_area(root, x=None, y=None):
+    """Screen area not covered by the taskbar: (left, top, right, bottom).
+
+    With a point (x, y) it is the monitor that contains (or is nearest to) the point; without one, the main monitor."""
+    if x is not None and y is not None:
+        try:
+            u = ctypes.windll.user32
+            u.MonitorFromPoint.restype = ctypes.c_void_p
+            u.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            u.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MonitorInfo)]
+            hm = u.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)   # MONITOR_DEFAULTTONEAREST
+            mi = _MonitorInfo()
+            mi.cbSize = ctypes.sizeof(mi)
+            if hm and u.GetMonitorInfoW(hm, ctypes.byref(mi)):
+                w = mi.rcWork
+                return w.left, w.top, w.right, w.bottom
+        except Exception:
+            pass
     r = wintypes.RECT()
     if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0):   # SPI_GETWORKAREA
         return r.left, r.top, r.right, r.bottom
