@@ -131,9 +131,12 @@ def bgra_to_dib24(bgra, w, h):
 
 def bgra_to_ppm(bgra, w, h):
     """Raw PPM that tk.PhotoImage can load directly (fast, no compression)."""
-    rgb = bytearray(w * h * 3)
-    rgb[0::3], rgb[1::3], rgb[2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
-    return b"P6\n%d %d\n255\n" % (w, h) + bytes(rgb)
+    head = b"P6\n%d %d\n255\n" % (w, h)
+    o = len(head)
+    out = bytearray(o + w * h * 3)
+    out[:o] = head
+    out[o::3], out[o + 1::3], out[o + 2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
+    return bytes(out)
 
 
 WNDENUM = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -209,14 +212,27 @@ class Selector:
         self.windows = list_windows(os.getpid()) if mode == "window" else []
         top = self.top = tk.Toplevel(root)
         top.overrideredirect(True)
+        top.configure(bg="#000000")
+        top.attributes("-alpha", 0.0)       # invisible until there is something to show (no white flash)
         # "+-1920" is how Tk spells a negative position; "-1920" would mean 1920 px from the RIGHT edge, which put
         # the overlay in the wrong place whenever a monitor sits left of / above the main one.
         top.geometry(f"{vw}x{vh}+{vx}+{vy}")
         top.attributes("-topmost", True)
-        self._place(vx, vy, vw, vh)
-        cv = self.cv = tk.Canvas(top, width=vw, height=vh, highlightthickness=0, bd=0, cursor="crosshair")
+        cv = self.cv = tk.Canvas(top, width=vw, height=vh, highlightthickness=0, bd=0, cursor="crosshair", bg="#000000")
         cv.pack()
-        self.photo = tk.PhotoImage(data=bgra_to_ppm(bgra, vw, vh))
+        self._place(vx, vy, vw, vh)
+        # 1) instant feedback: the live screen dims at once, with a short note. Preparing the frozen picture below
+        #    can take a while on big or several screens, and used to leave the screens blank white meanwhile.
+        pw0, _ph0 = primary_size()
+        hx0 = -vx + pw0 // 2
+        if not 0 < hx0 < vw:
+            hx0 = vw // 2
+        prep = cv.create_text(hx0, -vy + theme.s(28) if 0 <= -vy < vh else theme.s(28),
+                              text="Preparing the screenshot…", fill="#FFFFFF", font=theme.font(11, "bold"))
+        top.attributes("-alpha", 0.5)
+        top.update()
+        # 2) the frozen picture of the screens
+        self.photo = tk.PhotoImage(master=root, data=bgra_to_ppm(bgra, vw, vh))
         cv.create_image(0, 0, anchor="nw", image=self.photo)
         self.dim = [cv.create_rectangle(0, 0, 0, 0, fill="#000000", stipple="gray50", outline="") for _ in range(4)]
         self._dim(None)
@@ -242,6 +258,10 @@ class Selector:
         cv.bind("<Button-3>", lambda e: self._finish(None))
         top.bind("<Escape>", lambda e: self._finish(None))
         cv.bind("<Escape>", lambda e: self._finish(None))
+        # 3) paint the finished picture while the window is still half transparent, then switch to it in one step
+        cv.delete(prep)
+        top.update()
+        top.attributes("-alpha", 1.0)
 
     def run(self):
         try:
